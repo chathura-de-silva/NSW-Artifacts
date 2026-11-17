@@ -22,9 +22,9 @@
     .treatment_items         the treatment request as approved, one row per treated
                              item; empty when nothing was treated
 
-  With more than one item on the certificate, the items go on a second page,
-  NPQS form NPQS/094 "Attached sheet for the consignment", printed on plain
-  paper; box 08 then refers to it.
+  Box 08 lists as many of the certificate's items as it holds, in order. The
+  items that don't fit go on a second page, NPQS form NPQS/094 "Attached sheet
+  for the consignment", printed on plain paper; box 08 then refers to it.
 */ -}}
 <!DOCTYPE html>
 <html lang="en">
@@ -60,7 +60,13 @@
   table.goods { width: 100%; border-collapse: collapse; table-layout: fixed; }
   table.goods td { padding: 0; vertical-align: top; }
   table.goods td.desc { width: 125.2mm; }
-  table.goods td.qty { width: 46.3mm; padding-left: 19.3mm; }
+  table.goods td.qty { width: 46.3mm; padding-left: 19.3mm; position: relative; }
+  /* Box 09's totals run down their column beside the items rather than setting the first item's height. */
+  table.goods td.qty .totals { position: absolute; top: 0; left: 19.3mm; right: 0; }
+  /* A blank row between items. */
+  table.goods tr.next td { padding-top: 4.5mm; }
+  /* With items on the attached sheet, they take box 08's first 13 rows; the 14th refers to the sheet. */
+  .goods-rows.spill { max-height: 58.5mm; overflow: hidden; }
   /* The attached sheet (NPQS/094): plain A4, with the Word form's margins. */
   .attach { break-before: page; padding: 22.5mm 19.5mm 20mm 25.4mm; font-family: "Times New Roman", Times, serif; font-size: 12pt; line-height: 1.35; }
   /* Unlike the certificate page, the attached sheet grows with its rows and carries on over as many pages as
@@ -101,13 +107,50 @@
 <body>
 <p class="hint">Load the pre-printed Phytosanitary Certificate form in the printer, then press Ctrl+P (&#8984;P on a Mac). Print at 100% scale (not "Fit to page") with the browser's headers and footers turned off. When there is a second page (the attached sheet), print it on plain paper.</p>
 {{- $app := .application }}
-{{- /* More than one item on the certificate? Then the items go on the attached sheet. */}}
-{{- $seen := false }}{{ $multi := false }}
+{{- /* Which items box 08 holds. The box is 14 rows of 4.5mm. Templates can't measure text, so each line's
+     rows are estimated from its length: one row per 60 bytes in the 125.2mm description column (about 90%
+     of a row of capitals, 67 at 8pt, as wrapping breaks between words), plus the blank row before every item
+     but the first. The estimate errs towards too many rows, so an item is never cut at the box's edge. Box
+     09's totals take no rows of their own: they run down their column beside the items. Templates have no
+     arithmetic, so a count is the length of a string that gets one "x" per row (or per item); len counts
+     bytes, so a non-ASCII character counts more than once.
+       Every item fits: box 08 lists them all and there is no attached sheet.
+       Otherwise: box 08 lists the items, in order, until the next one would take it past 13 rows, and its
+       14th row refers to the attached sheet, which lists the rest. The first item is always listed in box 08,
+       cut at the box's edge when it is longer than the box. */}}
+{{- $steps := split "1,2,3,4,5,6,7,8,9,10,11,12,13" "," }}
+{{- $marksRows := "" }}
+{{- range $line := split $app.distinguishing_marks "\n" }}
+{{- $marksRows = print $marksRows "x" }}{{ $rest := $line }}
+{{- range $steps }}{{ if gt (len $rest) 60 }}{{ $marksRows = print $marksRows "x" }}{{ $rest = slice $rest 60 }}{{ end }}{{ end }}
+{{- end }}
+{{- $allRows := $marksRows }}{{ $boxRows := $marksRows }}{{ $filling := true }}
+{{- $itemCount := "" }}{{ $boxCount := "" }}
 {{- range $c := $app.commodities }}
 {{- $included := true }}
 {{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
-{{- if $included }}{{ if $seen }}{{ $multi = true }}{{ end }}{{ $seen = true }}{{ end }}
+{{- if $included }}
+{{- /* The item's three lines as box 08 prints them, below. */}}
+{{- $packages := "" }}
+{{- if eq (print $c.package_arrangement) "free_text" }}{{ $packages = trim $c.packages_free_text }}
+{{- else if eq (print $c.package_arrangement) "bulk" }}{{ $packages = "In bulk" }}
+{{- else }}{{ range $p := $c.packages }}{{ $packages = print $packages ", " (trim $p.count) " " (trim (coalesce $p.type.label $p.type.value)) }}{{ end }}{{ $packages = print $packages " containing" }}{{ end }}
+{{- $rows := "" }}
+{{- range $line := split (print $packages "\n" (trim $c.commodity_common_name.label) ", " (trim $c.commodity_description) "\n( " (trim $c.commodity_botanical_name) " )") "\n" }}
+{{- $rows = print $rows "x" }}{{ $rest := $line }}
+{{- range $steps }}{{ if gt (len $rest) 60 }}{{ $rows = print $rows "x" }}{{ $rest = slice $rest 60 }}{{ end }}{{ end }}
 {{- end }}
+{{- if ne $itemCount "" }}{{ $rows = print $rows "x" }}{{ end }}
+{{- $allRows = print $allRows $rows }}
+{{- if $filling }}
+{{- if or (eq $itemCount "") (le (len (print $boxRows $rows)) 13) }}{{ $boxRows = print $boxRows $rows }}{{ $boxCount = print $boxCount "x" }}
+{{- else }}{{ $filling = false }}{{ end }}
+{{- end }}
+{{- $itemCount = print $itemCount "x" }}
+{{- end }}
+{{- end }}
+{{- $spill := and (gt (len $allRows) 14) (lt (len $boxCount) (len $itemCount)) }}
+{{- if not $spill }}{{ $boxCount = $itemCount }}{{ end }}
 <div class="sheet">
 
 {{- /* 01. Name and address of exporter */}}
@@ -148,42 +191,22 @@
 {{- /* Reg. No. */}}
 <div class="f" style="left:120.7mm; top:97.2mm; width:74mm; height:8.6mm; line-height:4.3mm;">{{ with .registration_number }}{{ . }}{{ else }}NIL{{ end }}</div>
 
-{{- /* 08. Description of packages, distinguishing marks and name of produce, one row per certificate item, and
-     09. Quantity declared: the consignment's total net and gross weight the officer enters, beside the item */}}
+{{- /* 08. Description of packages, distinguishing marks and name of produce: the marks, then the items box 08
+     holds (see above), one row each, and
+     09. Quantity declared: the consignment's total net and gross weight the officer enters, beside the first item */}}
 <div class="f" style="left:24.7mm; top:115mm; width:171.5mm; height:63mm;">
+{{- if $spill }}<div class="goods-rows spill">{{ else }}<div class="goods-rows">{{ end }}
 <table class="goods">
-{{- if $multi }}
-  <tr>
-    <td class="desc">
-      {{- /* Each item's botanical name once, then the marks and the reference to the attached sheet. */}}
-      {{- range $i, $c := $app.commodities }}
-      {{- $included := true }}
-{{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
-      {{- $repeat := false }}
-      {{- range $j, $d := $app.commodities }}{{ if and (lt $j $i) (eq (print $d.commodity_botanical_name) (print $c.commodity_botanical_name)) }}
-        {{- $earlier := true }}
-        {{- range $.items }}{{ if and (eq (print .id) (print $d.id)) (eq (print .include_in_certificate) "false") }}{{ $earlier = false }}{{ end }}{{ end }}
-        {{- if $earlier }}{{ $repeat = true }}{{ end }}
-      {{- end }}{{ end }}
-      {{- if and $included (not $repeat) }}<div>{{ $c.commodity_botanical_name }}</div>{{ end }}
-      {{- end }}
-      {{- with $app.distinguishing_marks }}<div class="pre">{{ . }}</div>{{ end }}
-      <div>REFER THE ATTACHED SHEET</div>
-    </td>
-    <td class="qty">
-      {{- if not (zero $.total_net_weight) }}<div>Net {{ $.total_net_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
-      {{- if not (zero $.total_gross_weight) }}<div>Gross {{ $.total_gross_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
-    </td>
-  </tr>
-{{- else }}
 {{- with $app.distinguishing_marks }}
   <tr><td class="desc pre">{{ . }}</td><td class="qty"></td></tr>
 {{- end }}
+{{- $listed := "" }}
 {{- range $c := $app.commodities }}
 {{- $included := true }}
 {{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
 {{- if $included }}
-  <tr>
+{{- if lt (len $listed) (len $boxCount) }}
+  {{- if eq $listed "" }}<tr>{{ else }}<tr class="next">{{ end }}
     <td class="desc">
       <div>
         {{- if eq (print $c.package_arrangement) "free_text" }}{{ $c.packages_free_text }}
@@ -196,14 +219,21 @@
       <div>( {{ $c.commodity_botanical_name }} )</div>
     </td>
     <td class="qty">
+      {{- if eq $listed "" }}<div class="totals">
       {{- if not (zero $.total_net_weight) }}<div>Net {{ $.total_net_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
       {{- if not (zero $.total_gross_weight) }}<div>Gross {{ $.total_gross_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
+      </div>{{ end }}
     </td>
   </tr>
 {{- end }}
+{{- $listed = print $listed "x" }}
 {{- end }}
 {{- end }}
 </table>
+</div>
+{{- if $spill }}
+<div>REFER THE ATTACHED SHEET</div>
+{{- end }}
 </div>
 
 {{- /* 11. Additional declaration */}}
@@ -269,8 +299,9 @@
 
 </div>
 
-{{- if $multi }}
-{{- /* Page 2: NPQS/094 "Attached sheet for the consignment", printed on plain paper, so it carries its own headings. */}}
+{{- if $spill }}
+{{- /* Page 2: NPQS/094 "Attached sheet for the consignment", printed on plain paper, so it carries its own headings.
+     It lists the items box 08 doesn't. */}}
 <div class="sheet attach">
   <div class="formno">Form No: NPQS/094</div>
   <div class="org">
@@ -285,10 +316,12 @@
   <p>Date of issue: <span>{{ with .issue_date }}{{ date . "2006-01-02" "02/01/2006" }}{{ end }}</span></p>
   <table>
     <thead><tr><th>Description</th><th class="num">MC'S</th><th class="num">KGS</th></tr></thead>
+    {{- $passed := "" }}
     {{- range $c := $app.commodities }}
     {{- $included := true }}
 {{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
     {{- if $included }}
+    {{- if lt (len $passed) (len $boxCount) }}{{ $passed = print $passed "x" }}{{ else }}
     <tr>
       <td>{{ $c.commodity_common_name.label }}{{ if $c.commodity_description }}, {{ $c.commodity_description }}{{ end }}</td>
       <td class="num">
@@ -298,6 +331,7 @@
       </td>
       <td class="num">{{ if not (zero $c.quantity_net_weight) }}{{ $c.quantity_net_weight }} {{ $c.quantity_net_weight_unit.label }}{{ end }}</td>
     </tr>
+    {{- end }}
     {{- end }}
     {{- end }}
   </table>
