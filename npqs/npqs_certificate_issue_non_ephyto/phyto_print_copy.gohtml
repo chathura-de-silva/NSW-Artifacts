@@ -22,9 +22,10 @@
     .treatment_items         the treatment request as approved, one row per treated
                              item; empty when nothing was treated
 
-  Box 08 lists as many of the certificate's items as it holds, in order. The
-  items that don't fit go on a second page, NPQS form NPQS/094 "Attached sheet
-  for the consignment", printed on plain paper; box 08 then refers to it.
+  Box 08 groups the certificate's items by scientific name and lists as many
+  as it holds. What doesn't fit goes on a second page, NPQS form NPQS/094
+  "Attached sheet for the consignment", printed on plain paper; box 08 then
+  refers to it.
 */ -}}
 <!DOCTYPE html>
 <html lang="en">
@@ -63,8 +64,9 @@
   table.goods td.qty { width: 46.3mm; padding-left: 19.3mm; position: relative; }
   /* Box 09's totals run down their column beside the items rather than setting the first item's height. */
   table.goods td.qty .totals { position: absolute; top: 0; left: 19.3mm; right: 0; }
-  /* A blank row between items. */
-  table.goods tr.next td { padding-top: 4.5mm; }
+  /* A scientific name heads its items; a blank row comes before every name but the first. */
+  table.goods tr.sci td { font-style: italic; }
+  table.goods tr.gap td { padding-top: 4.5mm; }
   /* With items on the attached sheet, they take box 08's first 13 rows; the 14th refers to the sheet. */
   .goods-rows.spill { max-height: 58.5mm; overflow: hidden; }
   /* The attached sheet (NPQS/094): plain A4, with the Word form's margins. */
@@ -88,6 +90,8 @@
   .attach th { text-align: left; text-decoration: underline; padding: 1mm 2mm 2mm 0; }
   .attach td { vertical-align: top; padding: 1mm 2mm 1mm 0; }
   .attach th.num, .attach td.num { text-align: right; white-space: nowrap; }
+  .attach tr.sci td { font-style: italic; text-decoration: underline; }
+  .attach tr.gap td { padding-top: 4mm; }
   .attach .foot { margin-top: 8mm; font-weight: bold; }
   .hint { margin: 4mm auto; width: 210mm; padding: 2mm 3mm; border: 1px solid #999; background: #f4f4f4; font-size: 10pt; line-height: normal; }
   @media screen {
@@ -107,17 +111,26 @@
 <body>
 <p class="hint">Load the pre-printed Phytosanitary Certificate form in the printer, then press Ctrl+P (&#8984;P on a Mac). Print at 100% scale (not "Fit to page") with the browser's headers and footers turned off. When there is a second page (the attached sheet), print it on plain paper.</p>
 {{- $app := .application }}
-{{- /* Which items box 08 holds. The box is 14 rows of 4.5mm. Templates can't measure text, so each line's
+{{- /* The certificate's items, grouped by scientific name: one group per name, in the order each name first
+     appears, each holding its items in the application's order. Box 08 and the attached sheet walk them the
+     same way, as a run of units, each a scientific name or an item: the name, then its items, then the next
+     name. Box 08 prints the first units and the attached sheet the rest; a group can be split between them,
+     and its name then isn't repeated on the sheet (SCAN0212's sheet carries no scientific names).
+     The officer's left-off items (include_in_certificate: false) are in $off as "|id|" entries; a value is
+     in such a list when splitting the list on it gives more than one part. */}}
+{{- $off := "" }}
+{{- range $.items }}{{ if eq (print .include_in_certificate) "false" }}{{ $off = print $off "|" (trim .id) "|" }}{{ end }}{{ end }}
+{{- /* Which units box 08 holds. The box is 14 rows of 4.5mm. Templates can't measure text, so each line's
      rows are estimated from its length: one row per 60 bytes in the 125.2mm description column (about 90%
-     of a row of capitals, 67 at 8pt, as wrapping breaks between words), plus the blank row before every item
-     but the first. The estimate errs towards too many rows, so an item is never cut at the box's edge. Box
-     09's totals take no rows of their own: they run down their column beside the items. Templates have no
-     arithmetic, so a count is the length of a string that gets one "x" per row (or per item); len counts
+     of a row of capitals, 67 at 8pt, as wrapping breaks between words), plus the blank row before every
+     name but the first. The estimate errs towards too many rows, so an item is never cut at the box's edge.
+     Box 09's totals take no rows of their own: they run down their column beside the items. Templates have
+     no arithmetic, so a count is the length of a string that gets one "x" per row (or per unit); len counts
      bytes, so a non-ASCII character counts more than once.
-       Every item fits: box 08 lists them all and there is no attached sheet.
-       Otherwise: box 08 lists the items, in order, until the next one would take it past 13 rows, and its
-       14th row refers to the attached sheet, which lists the rest. The first item is always listed in box 08,
-       cut at the box's edge when it is longer than the box. */}}
+       Every unit fits: box 08 prints them all and there is no attached sheet.
+       Otherwise: box 08 prints the units, in order, until the next one would take it past 13 rows, and its
+       14th row refers to the attached sheet, which prints the rest. The first name and the first item are
+       always in box 08, cut at the box's edge when longer than the box. */}}
 {{- $steps := split "1,2,3,4,5,6,7,8,9,10,11,12,13" "," }}
 {{- $marksRows := "" }}
 {{- range $line := split $app.distinguishing_marks "\n" }}
@@ -125,32 +138,44 @@
 {{- range $steps }}{{ if gt (len $rest) 60 }}{{ $marksRows = print $marksRows "x" }}{{ $rest = slice $rest 60 }}{{ end }}{{ end }}
 {{- end }}
 {{- $allRows := $marksRows }}{{ $boxRows := $marksRows }}{{ $filling := true }}
-{{- $itemCount := "" }}{{ $boxCount := "" }}
+{{- $units := "" }}{{ $boxUnits := "" }}{{ $seen := "" }}
 {{- range $c := $app.commodities }}
-{{- $included := true }}
-{{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
-{{- if $included }}
-{{- /* The item's three lines as box 08 prints them, below. */}}
-{{- $packages := "" }}
-{{- if eq (print $c.package_arrangement) "free_text" }}{{ $packages = trim $c.packages_free_text }}
-{{- else if eq (print $c.package_arrangement) "bulk" }}{{ $packages = "In bulk" }}
-{{- else }}{{ range $p := $c.packages }}{{ $packages = print $packages ", " (trim $p.count) " " (trim (coalesce $p.type.label $p.type.value)) }}{{ end }}{{ $packages = print $packages " containing" }}{{ end }}
-{{- $rows := "" }}
-{{- range $line := split (print $packages "\n" (trim $c.commodity_common_name.label) ", " (trim $c.commodity_description) "\n( " (trim $c.commodity_botanical_name) " )") "\n" }}
+{{- $name := trim $c.commodity_botanical_name }}
+{{- if and (lt (len (split $off (print "|" (trim $c.id) "|"))) 2) (lt (len (split $seen (print "|" $name "|"))) 2) }}
+{{- $seen = print $seen "|" $name "|" }}{{ $kinds := "name item" }}
+{{- range $d := $app.commodities }}
+{{- if and (eq (trim $d.commodity_botanical_name) $name) (lt (len (split $off (print "|" (trim $d.id) "|"))) 2) }}
+{{- range $kind := split $kinds " " }}
+{{- $text := $name }}{{ $rows := "" }}
+{{- if eq $kind "name" }}{{ if ne $units "" }}{{ $rows = "x" }}{{ end }}
+{{- else }}
+{{- /* The item's line as box 08 prints it, below. */}}
+{{- $text = "" }}
+{{- if eq (print $d.package_arrangement) "free_text" }}{{ $text = trim $d.packages_free_text }}
+{{- else if eq (print $d.package_arrangement) "bulk" }}{{ $text = "In bulk" }}
+{{- else }}{{ range $i, $p := $d.packages }}{{ if $i }}{{ $text = print $text ", " }}{{ end }}{{ $text = print $text (trim $p.count) " " (trim (coalesce $p.type.label $p.type.value)) }}{{ end }}{{ end }}
+{{- $text = print $text " " (trim $d.commodity_common_name.label) }}{{ with trim $d.commodity_description }}{{ $text = print $text ", " . }}{{ end }}
+{{- if not (zero $d.quantity_net_weight) }}{{ $text = print $text " - " (trim $d.quantity_net_weight) }}{{ with $d.quantity_net_weight_unit }}{{ $text = print $text " " (trim .label) }}{{ end }}{{ end }}
+{{- end }}
+{{- if eq $text "" }}{{ $rows = print $rows "x" }}{{ end }}
+{{- range $line := split $text "\n" }}
 {{- $rows = print $rows "x" }}{{ $rest := $line }}
 {{- range $steps }}{{ if gt (len $rest) 60 }}{{ $rows = print $rows "x" }}{{ $rest = slice $rest 60 }}{{ end }}{{ end }}
 {{- end }}
-{{- if ne $itemCount "" }}{{ $rows = print $rows "x" }}{{ end }}
 {{- $allRows = print $allRows $rows }}
 {{- if $filling }}
-{{- if or (eq $itemCount "") (le (len (print $boxRows $rows)) 13) }}{{ $boxRows = print $boxRows $rows }}{{ $boxCount = print $boxCount "x" }}
+{{- if or (lt (len $units) 2) (le (len (print $boxRows $rows)) 13) }}{{ $boxRows = print $boxRows $rows }}{{ $boxUnits = print $boxUnits "x" }}
 {{- else }}{{ $filling = false }}{{ end }}
 {{- end }}
-{{- $itemCount = print $itemCount "x" }}
+{{- $units = print $units "x" }}
+{{- end }}
+{{- $kinds = "item" }}
 {{- end }}
 {{- end }}
-{{- $spill := and (gt (len $allRows) 14) (lt (len $boxCount) (len $itemCount)) }}
-{{- if not $spill }}{{ $boxCount = $itemCount }}{{ end }}
+{{- end }}
+{{- end }}
+{{- $spill := and (gt (len $allRows) 14) (lt (len $boxUnits) (len $units)) }}
+{{- if not $spill }}{{ $boxUnits = $units }}{{ end }}
 <div class="sheet">
 
 {{- /* 01. Name and address of exporter */}}
@@ -191,8 +216,9 @@
 {{- /* Reg. No. */}}
 <div class="f" style="left:120.7mm; top:97.2mm; width:74mm; height:8.6mm; line-height:4.3mm;">{{ with .registration_number }}{{ . }}{{ else }}NIL{{ end }}</div>
 
-{{- /* 08. Description of packages, distinguishing marks and name of produce: the marks, then the items box 08
-     holds (see above), one row each, and
+{{- /* 08. Description of packages, distinguishing marks and name of produce: the marks, then the units box 08
+     holds (see above): each scientific name, in italics, and below it its items, one line each with the
+     packages, the name and description, and the net weight, and
      09. Quantity declared: the consignment's total net and gross weight the officer enters, beside the first item */}}
 <div class="f" style="left:24.7mm; top:115mm; width:171.5mm; height:63mm;">
 {{- if $spill }}<div class="goods-rows spill">{{ else }}<div class="goods-rows">{{ end }}
@@ -200,33 +226,41 @@
 {{- with $app.distinguishing_marks }}
   <tr><td class="desc pre">{{ . }}</td><td class="qty"></td></tr>
 {{- end }}
-{{- $listed := "" }}
+{{- $listed := "" }}{{ $seen = "" }}
 {{- range $c := $app.commodities }}
-{{- $included := true }}
-{{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
-{{- if $included }}
-{{- if lt (len $listed) (len $boxCount) }}
-  {{- if eq $listed "" }}<tr>{{ else }}<tr class="next">{{ end }}
-    <td class="desc">
-      <div>
-        {{- if eq (print $c.package_arrangement) "free_text" }}{{ $c.packages_free_text }}
-        {{- else if eq (print $c.package_arrangement) "bulk" }}In bulk
-        {{- else }}
-          {{- range $i, $p := $c.packages }}{{ if $i }}, {{ end }}{{ $p.count }} {{ if $p.type.label }}{{ $p.type.label }}{{ else }}{{ $p.type.value }}{{ end }}{{ end }} containing
-        {{- end -}}
-      </div>
-      <div>{{ $c.commodity_common_name.label }}{{ if $c.commodity_description }}, {{ $c.commodity_description }}{{ end }}</div>
-      <div>( {{ $c.commodity_botanical_name }} )</div>
-    </td>
+{{- $name := trim $c.commodity_botanical_name }}
+{{- if and (lt (len (split $off (print "|" (trim $c.id) "|"))) 2) (lt (len (split $seen (print "|" $name "|"))) 2) }}
+{{- $seen = print $seen "|" $name "|" }}{{ $kinds := "name item" }}
+{{- range $d := $app.commodities }}
+{{- if and (eq (trim $d.commodity_botanical_name) $name) (lt (len (split $off (print "|" (trim $d.id) "|"))) 2) }}
+{{- range $kind := split $kinds " " }}
+{{- if lt (len $listed) (len $boxUnits) }}
+{{- if eq $kind "name" }}
+  {{ if eq $listed "" }}<tr class="sci">{{ else }}<tr class="sci gap">{{ end }}<td class="desc">{{ $name }}</td><td class="qty"></td></tr>
+{{- else }}
+{{- /* Built as above, where its rows are counted. */}}
+{{- $text := "" }}
+{{- if eq (print $d.package_arrangement) "free_text" }}{{ $text = trim $d.packages_free_text }}
+{{- else if eq (print $d.package_arrangement) "bulk" }}{{ $text = "In bulk" }}
+{{- else }}{{ range $i, $p := $d.packages }}{{ if $i }}{{ $text = print $text ", " }}{{ end }}{{ $text = print $text (trim $p.count) " " (trim (coalesce $p.type.label $p.type.value)) }}{{ end }}{{ end }}
+{{- $text = print $text " " (trim $d.commodity_common_name.label) }}{{ with trim $d.commodity_description }}{{ $text = print $text ", " . }}{{ end }}
+{{- if not (zero $d.quantity_net_weight) }}{{ $text = print $text " - " (trim $d.quantity_net_weight) }}{{ with $d.quantity_net_weight_unit }}{{ $text = print $text " " (trim .label) }}{{ end }}{{ end }}
+  <tr>
+    <td class="desc">{{ $text }}</td>
     <td class="qty">
-      {{- if eq $listed "" }}<div class="totals">
+      {{- if eq $listed "x" }}<div class="totals">
       {{- if not (zero $.total_net_weight) }}<div>Net {{ $.total_net_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
       {{- if not (zero $.total_gross_weight) }}<div>Gross {{ $.total_gross_weight }}{{ with $.total_weight_unit }} {{ .label }}{{ end }}</div>{{ end }}
       </div>{{ end }}
     </td>
   </tr>
 {{- end }}
+{{- end }}
 {{- $listed = print $listed "x" }}
+{{- end }}
+{{- $kinds = "item" }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 </table>
@@ -301,7 +335,7 @@
 
 {{- if $spill }}
 {{- /* Page 2: NPQS/094 "Attached sheet for the consignment", printed on plain paper, so it carries its own headings.
-     It lists the items box 08 doesn't. */}}
+     It prints the units box 08 doesn't: each scientific name, italic and underlined, then its items. */}}
 <div class="sheet attach">
   <div class="formno">Form No: NPQS/094</div>
   <div class="org">
@@ -316,21 +350,33 @@
   <p>Date of issue: <span>{{ with .issue_date }}{{ date . "2006-01-02" "02/01/2006" }}{{ end }}</span></p>
   <table>
     <thead><tr><th>Description</th><th class="num">MC'S</th><th class="num">KGS</th></tr></thead>
-    {{- $passed := "" }}
+    {{- $passed := "" }}{{ $seen = "" }}{{ $started := false }}
     {{- range $c := $app.commodities }}
-    {{- $included := true }}
-{{- range $.items }}{{ if and (eq (print .id) (print $c.id)) (eq (print .include_in_certificate) "false") }}{{ $included = false }}{{ end }}{{ end }}
-    {{- if $included }}
-    {{- if lt (len $passed) (len $boxCount) }}{{ $passed = print $passed "x" }}{{ else }}
+    {{- $name := trim $c.commodity_botanical_name }}
+    {{- if and (lt (len (split $off (print "|" (trim $c.id) "|"))) 2) (lt (len (split $seen (print "|" $name "|"))) 2) }}
+    {{- $seen = print $seen "|" $name "|" }}{{ $kinds := "name item" }}
+    {{- range $d := $app.commodities }}
+    {{- if and (eq (trim $d.commodity_botanical_name) $name) (lt (len (split $off (print "|" (trim $d.id) "|"))) 2) }}
+    {{- range $kind := split $kinds " " }}
+    {{- if lt (len $passed) (len $boxUnits) }}{{ $passed = print $passed "x" }}
+    {{- else if eq $kind "name" }}
+    {{ if $started }}<tr class="sci gap">{{ else }}<tr class="sci">{{ end }}<td colspan="3">{{ $name }}</td></tr>
+    {{- $started = true }}
+    {{- else }}
     <tr>
-      <td>{{ $c.commodity_common_name.label }}{{ if $c.commodity_description }}, {{ $c.commodity_description }}{{ end }}</td>
+      <td>{{ $d.commodity_common_name.label }}{{ if $d.commodity_description }}, {{ $d.commodity_description }}{{ end }}</td>
       <td class="num">
-        {{- if eq (print $c.package_arrangement) "free_text" }}{{ $c.packages_free_text }}
-        {{- else if eq (print $c.package_arrangement) "bulk" }}In bulk
-        {{- else }}{{ range $i, $p := $c.packages }}{{ if $i }}, {{ end }}{{ $p.count }} {{ if $p.type.label }}{{ $p.type.label }}{{ else }}{{ $p.type.value }}{{ end }}{{ end }}{{ end -}}
+        {{- if eq (print $d.package_arrangement) "free_text" }}{{ $d.packages_free_text }}
+        {{- else if eq (print $d.package_arrangement) "bulk" }}In bulk
+        {{- else }}{{ range $i, $p := $d.packages }}{{ if $i }}, {{ end }}{{ $p.count }} {{ if $p.type.label }}{{ $p.type.label }}{{ else }}{{ $p.type.value }}{{ end }}{{ end }}{{ end -}}
       </td>
-      <td class="num">{{ if not (zero $c.quantity_net_weight) }}{{ $c.quantity_net_weight }} {{ $c.quantity_net_weight_unit.label }}{{ end }}</td>
+      <td class="num">{{ if not (zero $d.quantity_net_weight) }}{{ $d.quantity_net_weight }} {{ $d.quantity_net_weight_unit.label }}{{ end }}</td>
     </tr>
+    {{- $started = true }}
+    {{- end }}
+    {{- end }}
+    {{- $kinds = "item" }}
+    {{- end }}
     {{- end }}
     {{- end }}
     {{- end }}
